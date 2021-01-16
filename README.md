@@ -109,7 +109,20 @@ python3 evaluate_bert.py ${test_features_path} ${model_save_path}
 | HGNN_base     |   80.2    | 75.4  | 78.0 |   46.2   |  60.7  |
 | HGNN_large    |   81.3    | 76.9  | 79.6 |   48.3   |  61.9  |
 
-
+## Citation
+If you use ReCO in your research, please cite our work with the following BibTex Entry
+```
+@inproceedings{comqabingningwang,
+  author    = {Bingning Wang and
+               Ting Yao and
+               Weipeng Chen and
+               Jingfang Xu and
+               Xiaochuan Wang},
+  title     = {ComQA:Compositional Question Answering via Hierarchical Graph Neural Networks},
+  booktitle = {The Web Conference 2021 (WWW2021)},  
+  year      = {2021}
+}
+```
 
 ## License
 
