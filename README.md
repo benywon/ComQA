@@ -110,7 +110,7 @@ python3 evaluate_bert.py ${test_features_path} ${model_save_path}
 | HGNN_large    |   81.3    | 76.9  | 79.6 |   48.3   |  61.9  |
 
 ## Citation
-If you use ReCO in your research, please cite our work with the following BibTex Entry
+If you use ComQA in your research, please cite our work with the following BibTex Entry
 ```
 @inproceedings{comqabingningwang,
   author    = {Bingning Wang and
