@@ -31,7 +31,7 @@ Finally, we get nearly 230,000 question-answer pairs:
 
 | Training data | Development Data | Test Data |
 |:--:|:--:|:--:|
-| 226,693  |5,000| 2,054 |
+| 117,343  |5,000| 2,054 |
 
 The questions in ComQA spans a large range of category such as medical, education, entertainment, etc.
 <p align="center">
