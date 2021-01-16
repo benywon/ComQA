@@ -3,7 +3,7 @@
 
 <p align="center">
     <br>
-    <img src="medias/comqa.png" width="600"/>
+    <img src="medias/comqa.logo.png" width="600"/>
     <br>
 </p>
 
