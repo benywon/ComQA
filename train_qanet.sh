@@ -26,4 +26,4 @@ python3.6 -m torch.distributed.launch --nproc_per_node=4 qanet.py \
 
 cd ../evaluation
 echo "start evaluation"
-python3 evaluate_bert.py ${test_features_path} ${model_save_path}
+python3 evaluate_qanet.py ${test_features_path} ${model_save_path}
