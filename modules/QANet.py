@@ -8,13 +8,13 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
+import torch.nn.functional as F
 
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_ch, out_ch, k):
         super().__init__()
-        self.depthwise_conv = nn.Conv1d(in_channels=in_ch, out_channels=in_ch, kernel_size=k, groups=in_ch,
+        self.depthwise_conv = nn.Conv1d(in_channels=in_ch, out_channels=out_ch, kernel_size=k, groups=in_ch,
                                         padding=k // 2)
         self.pointwise_conv = nn.Conv1d(in_channels=in_ch, out_channels=out_ch, kernel_size=1, padding=0)
 
@@ -49,8 +49,8 @@ class Embedding(nn.Module):
 class EncoderBlock(nn.Module):
     def __init__(self, conv_num, n_hidden, k, n_head):
         super().__init__()
-        self.convs = nn.ModuleList([nn.Sequential(DepthwiseSeparableConv(n_hidden, n_hidden, k),
-                                                  nn.LayerNorm(n_hidden)) for _ in range(conv_num)])
+        self.convs = nn.ModuleList([DepthwiseSeparableConv(n_hidden, n_hidden, k) for _ in range(conv_num)])
+        self.lns = nn.ModuleList([nn.LayerNorm(n_hidden) for _ in range(conv_num)])
         self.self_att = nn.MultiheadAttention(n_hidden, n_head, 0.1)
         self.fc = nn.Linear(n_hidden, n_hidden, bias=True)
         self.normb = nn.LayerNorm(n_hidden)
@@ -60,10 +60,14 @@ class EncoderBlock(nn.Module):
     def forward(self, x, mask):
         res = x
         out = self.normb(x)
-        out = self.convs(out).transpose(0, 1)
-        out = self.self_att(out, out, out, mask)
+        for ln, conv in zip(self.lns, self.convs):
+            out = conv(out)
+            out = ln(out)
+        out = out.transpose(0, 1)
+        out = self.self_att(out, out, out, mask)[0]
+        out = out.transpose(0, 1)
         out = out + res
-        out = F.dropout(out.transpose(0, 1), p=0.1, training=self.training)
+        out = F.dropout(out, p=0.1, training=self.training)
         res = out
         out = self.norme(out)
         out = self.fc(out)
@@ -78,7 +82,7 @@ class CQAttention(nn.Module):
         super().__init__()
         self.w = nn.Linear(n_hidden, n_hidden)
 
-    def forward(self, C, Q):
+    def forward(self, Q, C):
         # C: b_size*l_doc*h
         # Q: b_size*l_question*h
         Q = F.gelu(self.w(Q))
@@ -94,22 +98,27 @@ class QANet(nn.Module):
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
         self.embedding = Embedding(vocab_size + 1, n_embedding, n_hidden)
-        self.context_conv = DepthwiseSeparableConv(n_embedding, n_hidden, 5)
-        self.question_conv = DepthwiseSeparableConv(n_embedding, n_hidden, 5)
+        self.context_conv = DepthwiseSeparableConv(n_hidden, n_hidden, 5)
+        self.question_conv = DepthwiseSeparableConv(n_hidden, n_hidden, 5)
         self.c_emb_enc = EncoderBlock(conv_num=n_layer, n_hidden=n_hidden, k=7, n_head=n_head)
         self.q_emb_enc = EncoderBlock(conv_num=n_layer, n_hidden=n_hidden, k=7, n_head=n_head)
         self.cq_att = CQAttention(n_hidden)
         self.aggregation = EncoderBlock(conv_num=n_layer, n_hidden=n_hidden, k=7, n_head=n_head)
+        self.prediction = nn.Sequential(
+            nn.Linear(n_hidden, n_hidden // 2),
+            nn.Tanh(),
+            nn.Linear(n_hidden // 2, 1),
+        )
 
     def forward(self, question, context, label):
         Q = self.embedding(question)
         C = self.embedding(context)
         C = self.context_conv(C)
         Q = self.question_conv(Q)
-        Ce = self.c_emb_enc(C)
-        Qe = self.q_emb_enc(Q)
+        Ce = self.c_emb_enc(C, None)
+        Qe = self.q_emb_enc(Q, None)
         X = self.cq_att(Qe, Ce)
-        representations = self.aggregation(X)
+        representations = self.aggregation(X, None)
         mask_idx = torch.eq(context, self.vocab_size)
         hidden = representations.masked_select(mask_idx.unsqueeze(2).expand_as(representations)).view(
             -1, self.n_hidden)
