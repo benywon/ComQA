@@ -1,5 +1,4 @@
-[**中文说明**](./README_CN.md) | [**English readme**](./README.md)
-# ComQA:Compositional Question Answering via Hierarchical Graph Neural Networks
+# ComQA:Compositional Question Answering via Hierarchical Graph Neural Networks [arxiv](https://arxiv.org/abs/2101.06400)
 
 <p align="center">
     <br>

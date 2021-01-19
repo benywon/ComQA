@@ -13,9 +13,11 @@ import torch
 import torch.nn as nn
 from apex.contrib.multihead_attn import EncdecMultiheadAttn
 from apex.mlp import MLP
+from torch.utils.checkpoint import checkpoint
 
 warnings.filterwarnings("ignore")
 layer_norm = apex.normalization.FusedLayerNorm
+gradient_checkpoint = False
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -29,9 +31,9 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
-    def forward(self, src, src_mask=None):
+    def forward(self, src):
         src2 = self.norm1(src)
-        src2 = self.self_attn(src2, src2, src2, attn_mask=src_mask,
+        src2 = self.self_attn(src2, src2, src2, attn_mask=None,
                               key_padding_mask=None, is_training=self.training)[0]
         src = src + self.dropout1(src2)
 
@@ -56,7 +58,10 @@ class TransformerEncoder(nn.Module):
         output = src
 
         for i, mod in enumerate(self.layers):
-            output = mod(output, mask)
+            if gradient_checkpoint:
+                output = checkpoint(mod, output)
+            else:
+                output = mod(output)
         return output
 
 
