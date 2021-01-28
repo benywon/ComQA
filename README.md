@@ -39,7 +39,7 @@ The questions in ComQA spans a large range of category such as medical, educatio
     <br>
 </p> 
 
-You can obtain the ComQA data in the [`data`](.data) directory (distributed under the CC BY-SA 4.0 <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="知识共享许可协议" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a> licence).
+You can obtain the ComQA data in the [`data`](https://github.com/benywon/ComQA/tree/main/data) directory (distributed under the CC BY-SA 4.0 <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="知识共享许可协议" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a> licence).
 
 ## Run the models
 

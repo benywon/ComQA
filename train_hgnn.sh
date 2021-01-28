@@ -1,10 +1,10 @@
 #!/bin/bash
 base_dir=`pwd`
-jobname='bert for ComQA'
+jobname='HGNN for ComQA'
 train_features_path=${base_dir}/data/train.bert.obj
 dev_features_path=${base_dir}/data/dev.bert.obj
 test_features_path=${base_dir}/data/test.bert.obj
-model_save_path=${base_dir}/model/bert.comqa.base.th
+model_save_path=${base_dir}/model/hgnn.comqa.base.th
 
 echo $jobname
 echo "start processing data"
@@ -18,11 +18,12 @@ cd ../train
 
 echo "start training"
 export OMP_NUM_THREADS=2
-python3.6 -m torch.distributed.launch --nproc_per_node=4 bert.py \
+python3.6 -m torch.distributed.launch --nproc_per_node=4 hgnn.py \
 --train_file_path=${train_features_path} \
 --dev_file_path=${dev_features_path} \
 --model_save_path=${model_save_path} \
 --epoch=10 \
+--aggregation=fused \
 --pretrain_model=${base_dir}/model/bert.base.th
 
 cd ../evaluation

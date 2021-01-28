@@ -9,7 +9,7 @@
 import argparse
 
 
-def get_argument_parser():
+def get_argument_parser(return_args=True):
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -65,5 +65,7 @@ def get_argument_parser():
         help=
         "Whether to use cpu optimizer for training"
     )
-    args = parser.parse_args()
-    return args
+    if return_args:
+        args = parser.parse_args()
+        return args
+    return parser

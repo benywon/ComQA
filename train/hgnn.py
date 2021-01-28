@@ -1,0 +1,294 @@
+# -*- coding: utf-8 -*-
+"""
+ @Time    : 2021/1/27 下午5:55
+ @FileName: hgnn.py
+ @author: 王炳宁
+ @contact: wangbingning@sogou-inc.com
+"""
+
+import sys
+import time
+import apex
+import torch
+import torch.distributed as dist
+from apex import amp
+from scipy.linalg import block_diag
+
+sys.path.append('..')
+from modules.HGNN import HGNN
+from train.parser import get_argument_parser
+
+from utils import *
+
+np.random.seed(1000)
+torch.manual_seed(1024)
+torch.distributed.init_process_group(backend='nccl',
+                                     init_method='env://')
+parser = get_argument_parser(return_args=False)
+parser.add_argument(
+        "--aggregation",
+        type=str,
+        default='fused',
+        help=
+        "which fusion method is used in HGNN"
+    )
+args = parser.parse_args()
+print(args.local_rank, dist.get_rank(), dist.get_world_size())
+torch.cuda.set_device(args.local_rank)
+
+vocab_size = 50000
+n_embedding = 128
+n_hidden = 768
+n_layer = 12
+n_head = 12
+batch_size = 8
+
+max_learning_rate = 4e-5
+doc_max_length_size = 1024
+
+train_data = load_file(args.train_file_path)
+dev_data = load_file(args.dev_file_path)
+dev_data = sorted(dev_data, key=lambda x: len(x[0]))
+remove_data_size = len(dev_data) % dist.get_world_size()
+thread_dev_data = [dev_data[x + args.local_rank] for x in
+                   range(0, len(dev_data) - remove_data_size, dist.get_world_size())]
+
+print('train data size is {} test size {}'.format(len(train_data), len(dev_data)))
+model = HGNN(vocab_size, n_embedding, n_hidden, n_layer, n_head, aggregation=args.aggregation)
+
+filename = args.pretrain_model
+state_dict = load_file(filename)
+for name, para in model.named_parameters():
+    if name not in state_dict:
+        if dist.get_rank() == 0:
+            print('{} not load'.format(name))
+        continue
+    para.data = torch.FloatTensor(state_dict[name])
+print('model size {}'.format(get_model_parameters(model)))
+model.cuda()
+
+if args.optimizer.lower() == 'adam':
+    optimizer = apex.optimizers.FusedLAMB
+elif args.optimizer.lower() == 'lamb':
+    optimizer = apex.optimizers.FusedLAMB
+else:
+    optimizer = apex.optimizers.FusedSGD
+
+optim = optimizer(
+    model.parameters(),
+    eps=2.0e-7,
+    lr=1.0e-7,
+)
+model, optim = amp.initialize(model, optim, opt_level="O2", verbosity=0)
+model = apex.parallel.DistributedDataParallel(model)
+
+warm_up_steps = 500
+lr_opt_steps = max_learning_rate / 1000000
+warm_up_lr_opt_steps = max_learning_rate / warm_up_steps
+
+
+def metric_sum(val):
+    tensor = torch.tensor(val).cuda()
+    dist.reduce(tensor, 0)
+    return tensor.item()
+
+
+def metric_mean(val):
+    tensor = torch.tensor(val).cuda()
+    dist.reduce(tensor, 0)
+    return tensor.item() / dist.get_world_size()
+
+
+def get_shuffle_train_data():
+    pool = {}
+    for one in train_data:
+        length = len(one[0]) // 5
+        if length not in pool:
+            pool[length] = []
+        pool[length].append(one)
+    for one in pool:
+        np.random.shuffle(pool[one])
+    length_lst = list(pool.keys())
+    np.random.shuffle(length_lst)
+    whole_data = [x for y in length_lst for x in pool[y]]
+    remove_data_size = len(whole_data) % dist.get_world_size()
+    thread_data = [whole_data[x + args.local_rank] for x in
+                   range(0, len(whole_data) - remove_data_size, dist.get_world_size())]
+    return thread_data
+
+
+def _get_global_adj(seq_len, sample):
+    global_position = np.where(sample == 1)[0].item()
+    a_global = np.zeros([seq_len, seq_len])
+    a_global[:, global_position] = 1
+    a_global[global_position, :] = 1
+    return a_global
+
+
+def _get_inter_adj(seq_len, sample):
+    node_pos = np.where((sample == 1) | (sample == vocab_size))[0]
+    zeros_1 = np.zeros([seq_len, seq_len])
+    zeros_2 = np.zeros([seq_len, seq_len])
+    zeros_1[:, node_pos] = 1
+    zeros_2[node_pos, :] = 1
+    return np.logical_and(zeros_1, zeros_2)
+
+
+def _get_intra_adj(sample):
+    diag = []
+    size = 0
+    for one in sample:
+        size += 1
+        if one == 1 or one == vocab_size:
+            diag.append(np.ones([size, size]))
+            size = 0
+    if size > 0:
+        diag.append(np.ones([size, size]))
+    return block_diag(*diag)
+
+
+def get_three_tier_adjacency(batch):
+    b_size, seq_len = batch.shape
+    A_intra = []
+    A_inter = []
+    A_global = []
+    for sample in batch:
+        A_global.append(_get_global_adj(seq_len, sample))
+        A_intra.append(_get_intra_adj(sample))
+        A_inter.append(_get_inter_adj(seq_len, sample))
+    return np.asarray(A_intra), np.asarray(A_inter), np.asarray(A_global)
+
+
+def get_train_data(batch, max_len=doc_max_length_size):
+    batch, _ = padding(batch, max_len=max_len)
+    seq = batch.flatten()
+    real_end_pos = np.where(seq == -1)[0]
+    np.put(seq, real_end_pos, vocab_size)
+    all_end_pos_seq = np.where(seq == vocab_size)[0]
+    label = np.zeros(shape=len(all_end_pos_seq), dtype='float32')
+    for i, j in enumerate(all_end_pos_seq):
+        if j in real_end_pos:
+            label[i] = 1
+    batch = seq.reshape(batch.shape)
+    return batch, label
+
+
+current_number = 0
+update_number = 0
+
+
+def evaluation(epo):
+    results = []
+    for i in range(dist.get_world_size()):
+        results.extend(load_file('{}.tmp.obj'.format(i)))
+        os.remove('{}.tmp.obj'.format(i))
+    print('epoch:{},total:{}'.format(epo, len(results)))
+    threshold = 0.5
+    precision, recall, f1, macro_f1, accuracy = evaluate_comqa(results, threshold)
+    print('threshold:{}\nprecision:{}\nrecall:{}\nf1:{}\nmacro_f1:{}\naccuracy:{}\n{}'.format(
+        threshold, precision,
+        recall, f1,
+        macro_f1, accuracy,
+        '===' * 10))
+    return [precision, recall, macro_f1, f1, accuracy]
+
+
+def dev(epo):
+    model.eval()
+    total = len(thread_dev_data)
+    results = []
+    with torch.no_grad():
+        for i in tqdm(range(0, total, batch_size)):
+            sample = thread_dev_data[i:i + batch_size]
+            context_raw = [x[0] for x in sample]
+            paras = [x[1] for x in sample]
+            batch, label = get_train_data(context_raw, 1024)
+            batch = torch.LongTensor(batch)
+            mask_idx = torch.eq(batch, vocab_size)
+            A_intra, A_inter, A_global = get_three_tier_adjacency(batch)
+            batch = torch.LongTensor(batch).cuda()
+            A_intra = torch.FloatTensor(A_intra).cuda()
+            A_inter = torch.FloatTensor(A_inter).cuda()
+            A_global = torch.FloatTensor(A_global).cuda()
+            answer_logits = model([batch.cuda(), None, A_intra, A_inter, A_global])
+            end_num = mask_idx.sum(1).data.numpy().tolist()
+            answer_logits = answer_logits.cpu().data.numpy().tolist()
+            start = 0
+            for one_sent_end_num, para in zip(end_num, paras):
+                pred = answer_logits[start:start + one_sent_end_num]
+                results.append([pred, para])
+                start += one_sent_end_num
+    dump_file(results, '{}.tmp.obj'.format(dist.get_rank()))
+    dist.barrier()
+    if dist.get_rank() == 0:
+        return evaluation(epo)
+    return None
+
+
+def train(epo):
+    global current_number, update_number
+    model.train()
+    data = get_shuffle_train_data()
+    total = len(data)
+    total_loss = 0
+    num = 0
+    pre_time = None
+    instance_number = 0
+    for i in range(0, total, batch_size):
+        context = [x[0] for x in data[i:i + batch_size]]
+        batch, label = get_train_data(context)
+        A_intra, A_inter, A_global = get_three_tier_adjacency(batch)
+        batch = torch.LongTensor(batch).cuda()
+        label = torch.FloatTensor(label).cuda()
+        A_intra = torch.FloatTensor(A_intra).cuda()
+        A_inter = torch.FloatTensor(A_inter).cuda()
+        A_global = torch.FloatTensor(A_global).cuda()
+        loss = model([batch, label, A_intra, A_inter, A_global])
+        with amp.scale_loss(loss, optim) as scaled_loss:
+            scaled_loss.backward()
+        total_loss += loss.item() * len(context)
+        instance_number += len(context)
+        optim.step()
+        optim.zero_grad()
+        update_number += 1
+        for param_group in optim.param_groups:
+            if update_number > warm_up_steps:
+                param_group['lr'] -= lr_opt_steps
+            else:
+                param_group['lr'] += warm_up_lr_opt_steps
+        num += 1
+        if num % args.log_interval == 0:
+            if pre_time is None:
+                eclipse = 0
+            else:
+                eclipse = time.time() - pre_time
+            total_loss = metric_sum(total_loss)
+            instance_number = metric_sum(instance_number)
+            if dist.get_rank() == 0:
+                print(
+                    'epoch {}, mask loss is {:5.4f}, ms per batch is {:7.4f}, eclipse {:4.3f}%  lr={:e}'.format(epo,
+                                                                                                                total_loss / instance_number,
+                                                                                                                1000 * eclipse / instance_number,
+                                                                                                                i * 100 / total,
+                                                                                                                optim.param_groups[
+                                                                                                                    0][
+                                                                                                                    'lr']))
+            pre_time = time.time()
+            total_loss = 0
+            instance_number = 0
+
+
+if __name__ == '__main__':
+    results = []
+    best_f1 = 0
+    for i in range(args.epoch):
+        train(i)
+        results = dev(i)
+        output = {}
+        if dist.get_rank() == 0:
+            print('epoch {} done!! result is {}'.format(i, results))
+            if results[2] > best_f1:
+                best_f1 = results[2]
+                for name, param in model.module.named_parameters():
+                    output[name] = param.data.cpu().numpy()
+                dump_file(output, args.model_save_path)
