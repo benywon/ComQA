@@ -5,9 +5,11 @@ The compressed dataset is `comqa.tar.gz`, you can unzip it into the current fold
 
 you can validate the file information with md5sum
 
-* comqa.tar.gz 2b9613957417fe417331addeb44b7576
-* train.json af281593b7ea565e99fc21938db4d290
-* dev.json 70495ebfbdef3fc718d82a0895f3fa17
-* test.json 09e8eff434ae529e56ce571eaa941ca7
+* comqa.tar.gz ce935a77710615bcc2447c18157cd10d
+* train.json 4e075e27a8e8058e8854c5c53e05597a
+* dev.json e73e7cdd36d040cef1e4df5d2a1bf495
+* test.json 62769f288c50a5cd3ab1c85a5ee2c0c8
 
-**THE `comqa.tar.gz` IS UNDER CHECK AND WILL BE RELEASED ASAP**
+~~**THE `comqa.tar.gz` IS UNDER CHECK AND WILL BE RELEASED ASAP**~~
+
+* The dataset can be download from https://drive.google.com/file/d/1moH4bhkVJqCYWaKMzTc8OgtPbRSDnuvc/view?usp=sharing
